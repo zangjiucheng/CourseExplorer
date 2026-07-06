@@ -13,7 +13,10 @@ class dbClass:
     def __init__(self):
         self.ClassCollectionName = "Class2024Winter"
 
-        self.url = os.environ.get("MONGODB_URI", DEFAULT_MONGODB_URI)
+        # Fall back to the default when MONGODB_URI is unset OR set-but-empty
+        # (e.g. `MONGODB_URI=` in a .env / compose file), which os.environ.get
+        # with a default would otherwise pass through as an empty string.
+        self.url = (os.environ.get("MONGODB_URI") or "").strip() or DEFAULT_MONGODB_URI
 
         self.ClassDATABASE = connectDB(mongo_host=self.url)
         self.ClassDATABASE.connectDataBase('UWRegistrationDB')
