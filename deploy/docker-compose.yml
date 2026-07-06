@@ -1,0 +1,25 @@
+# Server-side (oracle-cloud) deployment: pulls the prebuilt image from ghcr.io
+# instead of building on the box (RAM is tight there). Run from this directory:
+#   docker compose pull && docker compose up -d
+services:
+  uw-course:
+    image: ghcr.io/zangjiucheng/uw-course:latest
+    container_name: uw-course
+    # Bind to loopback only; nginx terminates TLS and reverse-proxies. Mirrors
+    # the beanbook/hedgedoc pattern already on this host.
+    ports:
+      - "127.0.0.1:31415:31415"
+    environment:
+      - UW_COURSE_HOST=0.0.0.0
+      - UW_COURSE_PORT=31415
+      # Optional: overrides the baked-in default. Put the scoped read-only URI
+      # in a sibling .env file (MONGODB_URI=...). Leave blank to use the default.
+      - MONGODB_URI=${MONGODB_URI:-}
+    restart: unless-stopped
+    healthcheck:
+      # Hits the static index (no DB load) to confirm the server is up.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:31415/', timeout=5)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
