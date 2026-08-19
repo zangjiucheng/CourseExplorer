@@ -42,9 +42,9 @@ export const api = {
       body: JSON.stringify({ term, selections }),
     }),
 
-  resolvePlan: (planText: string) =>
+  resolvePlan: (term: string, selections: { course_code: string; class_id: number | null }[]) =>
     requestJson<SchedulePayload>('/api/plan/resolve', {
       method: 'POST',
-      body: JSON.stringify({ plan_text: planText }),
+      body: JSON.stringify({ term, selections }),
     }),
 };

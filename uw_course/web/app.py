@@ -93,21 +93,29 @@ def create_app() -> Flask:
     @app.post("/api/plan/resolve")
     def resolve_plan():
         payload = request.get_json(silent=True) or {}
-        plan_text = payload.get("plan_text", "")
-        try:
-            parsed = service.parse_plan_text(plan_text)
-        except ValueError as exc:
-            return jsonify({"error": str(exc)}), 400
+
+        if "plan_text" in payload:
+            try:
+                parsed = service.parse_plan_text(payload.get("plan_text", ""))
+            except ValueError as exc:
+                return jsonify({"error": str(exc)}), 400
+            term = parsed["term"]
+            raw_selections = parsed.get("selections", [])
+        else:
+            term = (payload.get("term") or "").strip()
+            if not term:
+                return jsonify({"error": "Missing term"}), 400
+            raw_selections = payload.get("selections", [])
 
         selections = [
             ScheduleSelection(
                 course_code=normalize_course_code(item.get("course_code", "")),
                 class_id=item.get("class_id"),
             )
-            for item in parsed.get("selections", [])
+            for item in raw_selections
             if item.get("course_code")
         ]
-        return jsonify(service.resolve_plan(parsed["term"], selections))
+        return jsonify(service.resolve_plan(term, selections))
 
     return app
 

@@ -1,4 +1,4 @@
-export type PlanModalMode = 'import' | 'export' | 'resolve';
+export type PlanModalMode = 'import' | 'export';
 
 interface Props {
   mode: PlanModalMode;
@@ -14,12 +14,6 @@ const COPY: Record<PlanModalMode, { title: string; desc: string; cta: string; pl
     desc: 'Paste a plan. A bare course code auto-resolves a section; add a class number to lock a specific one.',
     cta: 'Apply plan',
     placeholder: 'Class2026Spring\n\nCS 341\nMATH 239\nSTAT 230, 1234',
-  },
-  resolve: {
-    title: 'Auto-resolve courses',
-    desc: 'List course codes only — we pick the best non-conflicting sections for you.',
-    cta: 'Resolve sections',
-    placeholder: 'Class2026Spring\n\nCS 341\nMATH 239\nSTAT 230',
   },
   export: {
     title: 'Export plan text',

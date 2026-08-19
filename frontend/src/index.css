@@ -251,8 +251,13 @@ textarea {
   white-space: nowrap;
 }
 
-.header-btn:hover {
+.header-btn:hover:not(:disabled) {
   background: var(--ink-soft);
+}
+
+.header-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .header-btn-glyph {

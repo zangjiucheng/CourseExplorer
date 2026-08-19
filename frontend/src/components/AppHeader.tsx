@@ -99,7 +99,17 @@ export default function AppHeader({
         </button>
       </div>
 
-      <button type="button" className="header-btn" onClick={onAutoResolve}>
+      <button
+        type="button"
+        className="header-btn"
+        onClick={onAutoResolve}
+        disabled={selectedCount === 0}
+        title={
+          selectedCount === 0
+            ? 'Add courses to your plan first'
+            : 'Re-pick the best non-conflicting sections for the courses in your plan'
+        }
+      >
         <span className="header-btn-glyph">⤳</span>Auto-resolve
       </button>
       <button type="button" className="header-btn" onClick={onPlanText}>

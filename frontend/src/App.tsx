@@ -14,6 +14,16 @@ let nextToastId = 0;
 
 const EMPTY_SCHEDULE: SchedulePayload = { term: '', items: [], weekly: {} };
 
+function unresolvedNote(payload: SchedulePayload): string {
+  const unresolved = payload.unresolved_courses || [];
+  if (unresolved.length === 0) return '';
+  const summary = unresolved
+    .slice(0, 2)
+    .map((item) => item.course_code)
+    .join(', ');
+  return ` ${unresolved.length} could not be resolved${summary ? `: ${summary}` : ''}.`;
+}
+
 export default function App() {
   const [terms, setTerms] = useState<string[]>([]);
   const [term, setTerm] = useState('');
@@ -154,68 +164,54 @@ export default function App() {
     [schedulePayload.items, searchResults, selections, focusCourseInSearch, showToast]
   );
 
+  const applyResolvedPayload = useCallback((payload: SchedulePayload) => {
+    const resolved = payload.resolved_items || [];
+    setTerm(payload.term);
+    setSelections(resolved);
+    setActiveSectionKey(resolved[0] ? sectionKey(resolved[0]) : null);
+    setSchedulePayload(payload);
+    return resolved;
+  }, []);
+
   const handleImportPlan = useCallback(
     async (planText: string) => {
       const parsed = await api.parsePlan(planText);
-      const newTerm = parsed.term;
-      setTerm(newTerm);
+      const payload = await api.resolvePlan(parsed.term, parsed.selections);
       setSearchResults([]);
-
-      const newSelections: Section[] = [];
-      let skipped = 0;
-      for (const sel of parsed.selections) {
-        if (sel.class_id == null) {
-          skipped++;
-          continue;
-        }
-        const coursePayload = await api.getCourse(newTerm, sel.course_code);
-        const matching = coursePayload.sections.find((s) => s.class_id === sel.class_id);
-        if (matching) newSelections.push(matching);
-      }
-
-      setSelections(newSelections);
-      setActiveSectionKey(newSelections[0] ? sectionKey(newSelections[0]) : null);
-      await refreshSchedule(newTerm, newSelections);
-
-      if (skipped > 0) {
-        showToast(
-          `Imported locked sections. ${skipped} course-only line(s) skipped; use Auto-resolve for those.`
-        );
-      } else {
-        showToast('Plan imported.');
-      }
-    },
-    [refreshSchedule, showToast]
-  );
-
-  const handleAutoResolve = useCallback(
-    async (planText: string) => {
-      const payload = await api.resolvePlan(planText);
-      const resolved = payload.resolved_items || [];
-      setTerm(payload.term);
-      setSelections(resolved);
-      setActiveSectionKey(resolved[0] ? sectionKey(resolved[0]) : null);
-      setSearchResults([]);
-      setSchedulePayload(payload);
-
-      const unresolvedCount = (payload.unresolved_courses || []).length;
+      const resolved = applyResolvedPayload(payload);
       const autoCount = (payload.auto_resolved_courses || []).length;
-      if (unresolvedCount > 0) {
-        const summary = (payload.unresolved_courses || [])
-          .slice(0, 2)
-          .map((item) => item.course_code)
-          .join(', ');
-        showToast(
-          `Auto-resolved ${autoCount} course(s). ${unresolvedCount} could not be resolved${
-            summary ? `: ${summary}` : ''
-          }.`
-        );
-      } else {
-        showToast(`Auto-resolved ${autoCount} course(s).`);
-      }
+      showToast(
+        `Imported ${resolved.length} section(s)${
+          autoCount > 0 ? `, ${autoCount} auto-resolved` : ''
+        }.${unresolvedNote(payload)}`
+      );
     },
-    [showToast]
+    [applyResolvedPayload, showToast]
   );
+
+  // Auto-resolve re-picks the best non-conflicting section for every course
+  // already in the plan — no plan text, no dialog.
+  const handleAutoResolve = useCallback(async () => {
+    const courseCodes = Array.from(
+      new Set(selections.map((s) => s.course_code).filter(Boolean))
+    );
+    if (courseCodes.length === 0) {
+      showToast('Add courses to your plan first — Auto-resolve works on what you already have.');
+      return;
+    }
+
+    try {
+      const payload = await api.resolvePlan(
+        term,
+        courseCodes.map((course_code) => ({ course_code, class_id: null }))
+      );
+      applyResolvedPayload(payload);
+      const autoCount = (payload.auto_resolved_courses || []).length;
+      showToast(`Auto-resolved ${autoCount} course(s).${unresolvedNote(payload)}`);
+    } catch (err: unknown) {
+      showToast((err as Error).message);
+    }
+  }, [term, selections, applyResolvedPayload, showToast]);
 
   const openModal = useCallback((mode: PlanModalMode) => {
     setModalText('');
@@ -253,13 +249,12 @@ export default function App() {
     }
 
     try {
-      if (modalMode === 'import') await handleImportPlan(modalText);
-      else if (modalMode === 'resolve') await handleAutoResolve(modalText);
+      await handleImportPlan(modalText);
       setModalMode(null);
     } catch (err: unknown) {
       showToast((err as Error).message);
     }
-  }, [modalMode, modalText, handleImportPlan, handleAutoResolve, showToast]);
+  }, [modalMode, modalText, handleImportPlan, showToast]);
 
   const allSections = [
     ...(schedulePayload.items || []),
@@ -283,7 +278,7 @@ export default function App() {
         onSetView={setScheduleView}
         selectedCount={selections.length}
         conflictCount={conflicts.length}
-        onAutoResolve={() => openModal('resolve')}
+        onAutoResolve={handleAutoResolve}
         onPlanText={() => openModal('import')}
         onGoose={() => gooseRef.current?.release()}
       />
