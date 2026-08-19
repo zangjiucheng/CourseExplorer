@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "uw-course"
-version = "3.2.0"
+version = "3.2.1"
 description = "A browser-based University of Waterloo course planner backed by live MongoDB data"
 authors = [
     { name = "Jiucheng Zang", email = "git.jiucheng@gmail.com" }
