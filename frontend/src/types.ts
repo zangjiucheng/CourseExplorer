@@ -1,3 +1,10 @@
+export interface Meeting {
+  raw_time: string;
+  start_time: string | null;
+  end_time: string | null;
+  days: string[];
+}
+
 export interface Section {
   class_id: number;
   course_code: string;
@@ -7,6 +14,8 @@ export interface Section {
   start_time: string | null;
   end_time: string | null;
   days: string[];
+  /** Every meeting this class has. Absent on responses from an older API. */
+  meetings?: Meeting[];
 }
 
 export interface CourseResult {

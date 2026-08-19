@@ -103,7 +103,7 @@ class CourseService:
                         {"classTitle": {"$regex": query_regex, "$options": "i"}},
                     ]
                 },
-                {"_id": 1, "ClassIndex": 1, "classTitle": 1, "time": 1, "availableSeat": 1},
+                {"_id": 1, "ClassIndex": 1, "classTitle": 1, "time": 1, "times": 1, "availableSeat": 1},
             ).limit(limit * 6)
         )
 
@@ -139,7 +139,7 @@ class CourseService:
         docs = list(
             self.db.ClassSchedule.find(
                 {"ClassIndex": normalized_code},
-                {"_id": 1, "ClassIndex": 1, "classTitle": 1, "time": 1, "availableSeat": 1},
+                {"_id": 1, "ClassIndex": 1, "classTitle": 1, "time": 1, "times": 1, "availableSeat": 1},
             )
         )
         return {
@@ -163,7 +163,7 @@ class CourseService:
             docs = list(
                 self.db.ClassSchedule.find(
                     filters,
-                    {"_id": 1, "ClassIndex": 1, "classTitle": 1, "time": 1, "availableSeat": 1},
+                    {"_id": 1, "ClassIndex": 1, "classTitle": 1, "time": 1, "times": 1, "availableSeat": 1},
                 )
             )
             if not docs:
@@ -206,7 +206,7 @@ class CourseService:
                 docs = list(
                     self.db.ClassSchedule.find(
                         {"ClassIndex": course_code, "_id": selection.class_id},
-                        {"_id": 1, "ClassIndex": 1, "classTitle": 1, "time": 1, "availableSeat": 1},
+                        {"_id": 1, "ClassIndex": 1, "classTitle": 1, "time": 1, "times": 1, "availableSeat": 1},
                     )
                 )
                 if not docs:
@@ -226,7 +226,7 @@ class CourseService:
             docs = list(
                 self.db.ClassSchedule.find(
                     {"ClassIndex": course_code},
-                    {"_id": 1, "ClassIndex": 1, "classTitle": 1, "time": 1, "availableSeat": 1},
+                    {"_id": 1, "ClassIndex": 1, "classTitle": 1, "time": 1, "times": 1, "availableSeat": 1},
                 )
             )
             sections = [self._serialize_section(doc) for doc in docs]
@@ -280,6 +280,24 @@ class CourseService:
     def _serialize_section(self, doc: dict) -> dict:
         raw_time = doc.get("time") or ""
         start_time, end_time, days = parse_time_range(raw_time)
+        # A class can meet more than once: a lab on alternating weeks, a second
+        # weekly slot, a midterm with two sittings. "times" holds them all and
+        # falls back to the single "time" for documents written before the
+        # sync started recording them.
+        raw_times = [value for value in (doc.get("times") or []) if value]
+        if not raw_times and raw_time:
+            raw_times = [raw_time]
+        meetings = []
+        for value in raw_times:
+            meet_start, meet_end, meet_days = parse_time_range(value)
+            meetings.append(
+                {
+                    "raw_time": value,
+                    "start_time": meet_start,
+                    "end_time": meet_end,
+                    "days": meet_days,
+                }
+            )
         return {
             "class_id": doc.get("_id"),
             "course_code": doc.get("ClassIndex", ""),
@@ -289,13 +307,47 @@ class CourseService:
             "start_time": start_time,
             "end_time": end_time,
             "days": days,
+            "meetings": meetings,
         }
+
+    @staticmethod
+    def _section_meetings(section: dict) -> list[dict]:
+        """The distinct weekly slots of a section, for the grid and for clashes.
+
+        A biweekly lab lists one meeting per date, but a weekly timetable has
+        nowhere to put the date: all of them land on the same day at the same
+        hour. Collapsing them keeps one block per slot instead of stacking
+        eleven identical ones. The full list stays on the section as
+        "meetings" for anything that does care about the dates.
+        """
+        seen = set()
+        slots = []
+        for meeting in section.get("meetings") or []:
+            if not (meeting.get("start_time") and meeting.get("end_time") and meeting.get("days")):
+                continue
+            key = (tuple(meeting["days"]), meeting["start_time"], meeting["end_time"])
+            if key in seen:
+                continue
+            seen.add(key)
+            slots.append(meeting)
+        if slots:
+            return slots
+        if section.get("start_time") and section.get("end_time") and section.get("days"):
+            return [section]
+        return []
 
     def _build_schedule_payload(self, term: str, items: list[dict]) -> dict:
         weekly: dict[str, list[dict]] = {day: [] for day in WEEK_DAYS}
         for section in items:
-            for day in section["days"]:
-                weekly[day].append(section)
+            for meeting in self._section_meetings(section):
+                entry = {**section, **{
+                    "raw_time": meeting["raw_time"],
+                    "start_time": meeting["start_time"],
+                    "end_time": meeting["end_time"],
+                    "days": meeting["days"],
+                }} if meeting is not section else section
+                for day in meeting["days"]:
+                    weekly[day].append(entry)
         for day in WEEK_DAYS:
             weekly[day].sort(key=lambda item: time_to_minutes(item["start_time"]))
         return {
@@ -364,26 +416,32 @@ class CourseService:
         return {key: value for key, value in section.items() if not key.startswith("_")}
 
     def _count_conflicts(self, section: dict, others: list[dict]) -> int:
-        if not section["start_time"] or not section["end_time"] or not section["days"]:
+        # A class clashes if any of its meetings overlaps any of theirs, so a
+        # second weekly slot cannot hide behind the first one.
+        own = self._section_meetings(section)
+        if not own:
             return 0
 
         count = 0
-        start_a = time_to_minutes(section["start_time"])
-        end_a = time_to_minutes(section["end_time"])
-        section_days = set(section["days"])
-
         for other in others:
             if section["course_code"] == other["course_code"] and section["class_id"] == other["class_id"]:
                 continue
-            if not other.get("start_time") or not other.get("end_time") or not other.get("days"):
-                continue
-            if not section_days.intersection(other["days"]):
-                continue
-            start_b = time_to_minutes(other["start_time"])
-            end_b = time_to_minutes(other["end_time"])
-            if start_a < end_b and start_b < end_a:
+            if self._meetings_overlap(own, self._section_meetings(other)):
                 count += 1
         return count
+
+    @staticmethod
+    def _meetings_overlap(first: list[dict], second: list[dict]) -> bool:
+        for a in first:
+            start_a = time_to_minutes(a["start_time"])
+            end_a = time_to_minutes(a["end_time"])
+            days_a = set(a["days"])
+            for b in second:
+                if not days_a.intersection(b["days"]):
+                    continue
+                if start_a < time_to_minutes(b["end_time"]) and time_to_minutes(b["start_time"]) < end_a:
+                    return True
+        return False
 
     def _section_type_rank(self, class_title: str) -> int:
         normalized = (class_title or "").strip().upper()

@@ -21,6 +21,39 @@ export function sectionKey(section: { course_code: string; class_id: number | nu
   return `${section.course_code}::${section.class_id}`;
 }
 
+/**
+ * One entry per distinct weekly slot. A class with a second weekly slot
+ * occupies more than one place on the grid, so every consumer that reasons
+ * about days and times has to see each slot separately. A biweekly lab
+ * instead lists one meeting per date, which all fall on the same day at the
+ * same hour, so identical slots collapse rather than stacking as duplicate
+ * blocks. Sections without a meeting list (older API responses) pass through
+ * untouched.
+ */
+export function expandMeetings(items: Section[]): Section[] {
+  const expanded: Section[] = [];
+  items.forEach((item) => {
+    if (!item.meetings?.length) {
+      expanded.push(item);
+      return;
+    }
+    const seen = new Set<string>();
+    item.meetings.forEach((meeting) => {
+      const key = `${meeting.days.join(',')}|${meeting.start_time}|${meeting.end_time}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      expanded.push({
+        ...item,
+        raw_time: meeting.raw_time,
+        start_time: meeting.start_time,
+        end_time: meeting.end_time,
+        days: meeting.days,
+      });
+    });
+  });
+  return expanded;
+}
+
 export function parseClockToMinutes(rawClock: string | null | undefined): number {
   if (!rawClock) return 0;
   const [hours, minutes] = rawClock.split(':').map(Number);
@@ -113,14 +146,17 @@ export interface ConflictEntry {
 
 export function computeConflictEntries(items: Section[]): ConflictEntry[] {
   const entries: ConflictEntry[] = [];
+  const expanded = expandMeetings(items);
   WEEK_DAYS.forEach((day) => {
-    const dayItems = items
+    const dayItems = expanded
       .filter((item) => item.days?.includes(day) && item.start_time && item.end_time)
       .sort((a, b) => parseClockToMinutes(a.start_time) - parseClockToMinutes(b.start_time));
 
     for (let i = 0; i < dayItems.length; i++) {
       for (let j = i + 1; j < dayItems.length; j++) {
         if (parseClockToMinutes(dayItems[j].start_time) >= parseClockToMinutes(dayItems[i].end_time)) break;
+        // Two meetings of the same class are not a clash with itself.
+        if (sectionKey(dayItems[i]) === sectionKey(dayItems[j])) continue;
         entries.push({ day, first: dayItems[i], second: dayItems[j] });
       }
     }
@@ -130,7 +166,9 @@ export function computeConflictEntries(items: Section[]): ConflictEntry[] {
 
 export function computeConflictMap(items: Section[]): Map<string, Section[]> {
   const map = new Map<string, Section[]>();
-  const timed = items.filter((item) => item.days?.length && item.start_time && item.end_time);
+  const timed = expandMeetings(items).filter(
+    (item) => item.days?.length && item.start_time && item.end_time
+  );
 
   timed.forEach((item) => {
     item.days.forEach((day) => {
@@ -151,16 +189,25 @@ export function computeConflictMap(items: Section[]): Map<string, Section[]> {
 }
 
 export function getSectionConflicts(section: Section, selectedItems: Section[]): Section[] {
-  if (!section.start_time || !section.end_time || !section.days?.length) return [];
-  return selectedItems.filter((item) => {
-    if (sectionKey(item) === sectionKey(section)) return false;
-    if (!item.start_time || !item.end_time || !item.days?.length) return false;
-    const sameDay = section.days.some((day) => item.days.includes(day));
-    if (!sameDay) return false;
-    const startA = parseClockToMinutes(section.start_time);
-    const endA = parseClockToMinutes(section.end_time);
-    const startB = parseClockToMinutes(item.start_time);
-    const endB = parseClockToMinutes(item.end_time);
-    return startA < endB && startB < endA;
+  const own = expandMeetings([section]).filter(
+    (meeting) => meeting.start_time && meeting.end_time && meeting.days?.length
+  );
+  if (!own.length) return [];
+
+  const clashing = new Map<string, Section>();
+  expandMeetings(selectedItems).forEach((item) => {
+    if (sectionKey(item) === sectionKey(section)) return;
+    if (!item.start_time || !item.end_time || !item.days?.length) return;
+    const hit = own.some((meeting) => {
+      if (!meeting.days.some((day) => item.days.includes(day))) return false;
+      const startA = parseClockToMinutes(meeting.start_time);
+      const endA = parseClockToMinutes(meeting.end_time);
+      const startB = parseClockToMinutes(item.start_time);
+      const endB = parseClockToMinutes(item.end_time);
+      return startA < endB && startB < endA;
+    });
+    // One row per clashing class, however many of its meetings overlap.
+    if (hit && !clashing.has(sectionKey(item))) clashing.set(sectionKey(item), item);
   });
+  return [...clashing.values()];
 }

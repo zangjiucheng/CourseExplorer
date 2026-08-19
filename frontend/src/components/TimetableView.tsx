@@ -3,6 +3,7 @@ import {
   WEEK_DAYS,
   TIMELINE_PADDING,
   getTimelineConfig,
+  expandMeetings,
   parseClockToMinutes,
   sectionKey,
   formatTimeRange,
@@ -30,7 +31,7 @@ export default function TimetableView({
   onHoverSection,
   onSetActive,
 }: Props) {
-  const items = payload.items || [];
+  const items = expandMeetings(payload.items || []);
   const timedItems = items.filter((item) => item.days?.length && item.start_time && item.end_time);
   const timeline = getTimelineConfig(items);
 
