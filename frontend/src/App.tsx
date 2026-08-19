@@ -9,6 +9,7 @@ import Toast from './components/Toast';
 import { api } from './api';
 import type { Section, CourseResult, SchedulePayload, Toast as ToastType } from './types';
 import { sectionKey, computeConflictEntries, computeConflictMap } from './utils/schedule';
+import { loadStoredPlan, saveStoredPlan } from './utils/planStorage';
 
 let nextToastId = 0;
 
@@ -36,6 +37,7 @@ export default function App() {
   const [toasts, setToasts] = useState<ToastType[]>([]);
   const [modalMode, setModalMode] = useState<PlanModalMode | null>(null);
   const [modalText, setModalText] = useState('');
+  const [hydrated, setHydrated] = useState(false);
 
   const gooseRef = useRef<GooseHandle>(null);
 
@@ -57,17 +59,46 @@ export default function App() {
   );
 
   useEffect(() => {
+    const stored = loadStoredPlan();
+
     api
       .getTerms()
-      .then(({ terms: t }) => {
+      .then(async ({ terms: t }) => {
         setTerms(t);
-        const first = t[0] || '';
-        setTerm(first);
-        return refreshSchedule(first, []);
+        // Only trust the saved term if it is still on offer.
+        const restorable = stored && t.includes(stored.term) ? stored : null;
+        const startTerm = restorable ? restorable.term : t[0] || '';
+        setTerm(startTerm);
+
+        if (!restorable?.selections.length) {
+          await refreshSchedule(startTerm, []);
+          return;
+        }
+
+        const payload = await api.buildSchedule(startTerm, restorable.selections);
+        const restored = payload.items || [];
+        setSelections(restored);
+        setActiveSectionKey(restored[0] ? sectionKey(restored[0]) : null);
+        setSchedulePayload(payload);
+
+        if (restored.length < restorable.selections.length) {
+          showToast(
+            `Restored ${restored.length} of ${restorable.selections.length} saved section(s) — the rest are no longer offered.`
+          );
+        }
       })
-      .catch((err: Error) => showToast(err.message));
+      .catch((err: Error) => showToast(err.message))
+      .finally(() => setHydrated(true));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Remember the plan so a reload comes back to the same sections. Held until
+  // the restore above has finished, so the empty first render cannot wipe it,
+  // and skipped without a term so a failed load does not clear it either.
+  useEffect(() => {
+    if (!hydrated || !term) return;
+    saveStoredPlan(term, selections);
+  }, [hydrated, term, selections]);
 
   const handleTermChange = useCallback(
     (newTerm: string) => {
